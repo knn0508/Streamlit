@@ -250,14 +250,24 @@ def load_population_territory_data():
 
         # Convert all numeric columns to float, ensuring proper handling of small decimals
         for col in df.columns:
-            # Convert to numeric, handling any string formatting
-            df[col] = pd.to_numeric(df[col], errors='coerce')
+            # Convert to numeric, handling any string formatting and ensuring decimals are preserved
+            df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', '.'), errors='coerce')
 
         # Fill any NaN values with interpolation
         df = df.interpolate(method='linear')
 
         # Remove any rows that are still all NaN
         df = df.dropna(how='all')
+
+        # DEBUG: Print actual values for the problematic columns before filtering
+        debug_cols = ['Adambaşına kənd təsərrüfatına yararlı torpaq (ha)', 'Adambaşına əkin yeri (ha)']
+        for debug_col in debug_cols:
+            if debug_col in df.columns:
+                print(f"DEBUG - {debug_col}:")
+                print(f"  Sample values: {df[debug_col].head().tolist()}")
+                print(f"  Max value: {df[debug_col].max()}")
+                print(f"  Min value: {df[debug_col].min()}")
+                print(f"  All values: {df[debug_col].tolist()}")
 
         # Filter out columns that are problematic or have no valid category
         # Remove the first 3 columns as specified and keep only meaningful indicators
@@ -270,20 +280,29 @@ def load_population_territory_data():
             # Check if column has meaningful variation (not all zeros or very small values)
             col_data = df[col].dropna()
             if len(col_data) > 0:
-                # Check if the column has meaningful values (not all very close to zero)
-                if col_data.abs().max() > 0.001:  # At least some values are meaningful
+                # ALWAYS include the two specific columns that have small decimal values
+                if col in ['Adambaşına kənd təsərrüfatına yararlı torpaq (ha)', 'Adambaşına əkin yeri (ha)']:
+                    print(f"FORCING INCLUSION of {col} - Max value: {col_data.abs().max()}")
                     valid_columns.append(col)
+                else:
+                    # For other columns, use the original threshold
+                    if col_data.abs().max() > 0.001:
+                        valid_columns.append(col)
 
         # Keep only valid columns
         df = df[valid_columns]
+
+        # Final debug print
+        print(f"Final columns included: {df.columns.tolist()}")
+        for debug_col in debug_cols:
+            if debug_col in df.columns:
+                print(f"Final {debug_col} values: {df[debug_col].tolist()}")
 
         return df
 
     except Exception as e:
         st.error(f"CSV faylını yükləməkdə xəta: {e}")
         return None
-
-
 @st.cache_data
 def load_data(file_path, data_type, date_column, clear_cache=False):
     """Load and prepare data based on type"""
@@ -650,6 +669,7 @@ def create_forecast_plot(sector, model_name, category, data, start_year, end_yea
     plt.tight_layout()
     return fig
 
+
 def main():
     st.set_page_config(page_title="Azərbaycan Analitik Sistem", layout="wide")
 
@@ -707,6 +727,84 @@ def main():
         "Kateqoriya:",
         model_config["categories"]
     )
+
+    # PDF Report Generation Section
+    st.sidebar.header("📄 Hesabat Generasiyası")
+
+    # Define PDF mapping based on sector and model - Updated to match exact names
+    pdf_mapping = {
+        # Add debug to see actual values
+        selected_sector: {
+            selected_model: None  # Will be determined below
+        }
+    }
+
+    # Determine PDF file based on selections
+    pdf_file = None
+
+    # Check based on sector and model combination
+    if "Makro" in selected_sector or "İqtisadi" in selected_sector:
+        if "İqtisadi" in selected_model or "UDM" in selected_model:
+            pdf_file = "Birləşdirilmiş_Hesabat_Agriculture.pdf"
+    elif "Kənd" in selected_sector or "Təsərrüfat" in selected_sector:
+        if "Əhali" in selected_model or "Ərazi" in selected_model:
+            pdf_file = "Birləşdirilmiş_Hesabat_Demoqrafiya.pdf"
+    elif "Səhiyyə" in selected_sector:
+        if "Həkim" in selected_model or "həkim" in selected_model:
+            pdf_file = "Birləşdirilmiş_Hesabat_Hekimler.pdf"
+        elif "İnfeksiya" in selected_model or "infeksiya" in selected_model or "parazit" in selected_model:
+            pdf_file = "Səhiyyə_İnfeksiya_və_Parazit_Xəstəlikləri_Hesabat.pdf"
+        elif "Vərəm" in selected_model or "vərəm" in selected_model:
+            pdf_file = "Vərəm_Xəstəliyi_Hesabat.pdf"
+
+    # Alternative approach - check by file patterns if above doesn't work
+    if not pdf_file:
+        # Check if any of the data files match common patterns
+        if "Ehali_Ve_Erazi.csv" in model_config.get("file", ""):
+            pdf_file = "Birləşdirilmiş_Hesabat_Demoqrafiya.pdf"
+        elif "Kend_Teserrufati" in model_config.get("file", ""):
+            pdf_file = "Birləşdirilmiş_Hesabat_Agriculture.pdf"
+        elif "infeksion" in model_config.get("file", ""):
+            pdf_file = "Səhiyyə_İnfeksiya_və_Parazit_Xəstəlikləri_Hesabat.pdf"
+        elif "vərəm" in model_config.get("file", ""):
+            pdf_file = "Vərəm_Xəstəliyi_Hesabat.pdf"
+
+    # Debug information (remove after testing)
+    if debug_mode:
+        st.sidebar.write(f"Debug - Selected Sector: '{selected_sector}'")
+        st.sidebar.write(f"Debug - Selected Model: '{selected_model}'")
+        st.sidebar.write(f"Debug - Model Config File: '{model_config.get('file', 'N/A')}'")
+        st.sidebar.write(f"Debug - Determined PDF: '{pdf_file}'")
+
+    if pdf_file:
+        try:
+            with open(pdf_file, "rb") as file:
+                pdf_data = file.read()
+
+            st.sidebar.download_button(
+                label="📥 PDF Hesabatı Yüklə",
+                data=pdf_data,
+                file_name=f"{selected_model}_Hesabat.pdf",
+                mime="application/pdf",
+                help=f"{selected_model} üçün tam hesabat PDF faylı"
+            )
+
+            st.sidebar.success("✅ PDF hesabat mövcuddur!")
+
+        except FileNotFoundError:
+            st.sidebar.error(f"❌ PDF faylı tapılmadı: {pdf_file}")
+        except Exception as e:
+            st.sidebar.error(f"❌ PDF yükləmə xətası: {str(e)}")
+    else:
+        st.sidebar.info("ℹ️ Bu seçim üçün PDF hesabat mövcud deyil")
+        # Show current selection for debugging
+        if debug_mode:
+            st.sidebar.write("Available PDFs:")
+            st.sidebar.write("- Birləşdirilmiş_Hesabat_Agriculture.pdf")
+            st.sidebar.write("- Birləşdirilmiş_Hesabat_Demoqrafiya.pdf")
+            st.sidebar.write("- Birləşdirilmiş_Hesabat_Hekimler.pdf")
+            st.sidebar.write("- Səhiyyə_İnfeksiya_və_Parazit_Xəstəlikləri_Hesabat.pdf")
+            st.sidebar.write("- Vərəm_Xəstəliyi_Hesabat.pdf")
 
     # Forecast settings (only shown if end year is 2023)
     if end_year == 2023:
@@ -857,8 +955,8 @@ def main():
         3. **Zaman dövrü** təyin edin
         4. **Kateqoriya** seçin
         5. Proqnoz üçün son il **2023** seçin
-        6. Nəticələri təhlil edin
+        6. **PDF Hesabat** yükləyin
+        7. Nəticələri təhlil edin
         """)
-
 if __name__ == "__main__":
     main()
